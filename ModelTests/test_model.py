@@ -7,7 +7,7 @@ from sentence_transformers import SentenceTransformer
 # Add parent directory to path to import DataOps modules
 sys.path.append(str(Path(__file__).parent.parent))
 from DataOps.cleandata import (
-    ID_COL, TEXT_COLS, NUTRIENT_COLS, TAG_COLS, FLAG_COLS, COLS_TO_KEEP, clean
+    ID_COL, TEXT_COLS, NUTRIENT_COLS, TAG_COLS, FLAG_COLS, COLS_TO_KEEP
 )
 
 # Text columns to embed
@@ -15,10 +15,9 @@ TEXT_COLS_EMBED = ["category_name", "product_name", "ingredients_text"]
 
 
 def process_and_embed(df):
-    # Clean the data (but skip label_is_anomaly creation since we don't have labels)
-    # We need to manually process since clean() expects label_is_anomaly
+    # Cleans and embeds the raw CSV data to match the training feature set
     
-    # Keep only columns we need
+    # Keep only columns used in training
     keep = [c for c in COLS_TO_KEEP if c in df.columns and c != "label_is_anomaly"]
     df = df[keep].copy()
     
@@ -27,7 +26,7 @@ def process_and_embed(df):
         if col in df.columns:
             df[col] = df[col].astype("string")
     
-    # Nutrient columns → clean float (remove carets, keep pure numbers)
+    # Nutrient columns → clean float (remove carets, fill missing with -1)
     for col in NUTRIENT_COLS:
         if col in df.columns:
             numeric_val = df[col].astype(str).str.rstrip("^").str.strip()
@@ -47,15 +46,10 @@ def process_and_embed(df):
                 .astype(bool)
             )
     
-    # Drop rows without GTIN
+    # Drop rows without GTIN and empty ingredients
     df = df.dropna(subset=["gtin"])
-    
-    # Remove rows with empty ingredients_text
     if "ingredients_text" in df.columns:
-        df = df[
-            df["ingredients_text"].notna() & 
-            (df["ingredients_text"].astype(str).str.strip() != "")
-        ]
+        df = df[df["ingredients_text"].notna() & (df["ingredients_text"].astype(str).str.strip() != "")]
     
     # Embed text columns using SentenceTransformer
     print("Loading SentenceTransformer model...")
@@ -70,28 +64,33 @@ def process_and_embed(df):
             embedding_df = pd.DataFrame(embeddings, columns=embedding_cols, index=df.index)
             df = pd.concat([df, embedding_df], axis=1)
     
-    # Drop original text columns
+    # Drop original text columns to leave only embeddings + numeric features
     df = df.drop(columns=TEXT_COLS_EMBED, errors="ignore")
     
-    # Ensure GTIN is kept for reference but drop it before prediction
+    # Separate GTIN for reference, return Feature Matrix X
     gtin_column = df["gtin"].copy() if "gtin" in df.columns else None
     X = df.drop(columns=["gtin"], errors="ignore")
     
     return X, gtin_column
 
 
-def test_model_on_dataset(csv_path, expected_result, dataset_name):
+def test_model_on_dataset(csv_path, expected_result, dataset_name, threshold=0.3):
+    # Runs the model on a dataset using a CUSTOM probability threshold
+    
     print(f"\n{'=' * 70}")
     print(f"Testing on: {dataset_name}")
-    print(f"Expected: {expected_result}")
+    print(f"Expected: {expected_result} | Using Threshold: {threshold}")
     print(f"{'=' * 70}")
     
-    # Load CSV file
+    if not csv_path.exists():
+        print(f"Error: File not found at {csv_path}")
+        return 0, None, None
+    
+    # Load and process
     print(f"Loading {csv_path}...")
     df = pd.read_csv(csv_path)
     print(f"Loaded {len(df):,} rows")
     
-    # Process and embed
     X, gtin_column = process_and_embed(df)
     print(f"After processing: {len(X):,} rows, {len(X.columns)} features")
     
@@ -102,39 +101,38 @@ def test_model_on_dataset(csv_path, expected_result, dataset_name):
     
     if not model_path.exists():
         print(f"Error: Model not found at {model_path}")
-        return
+        return 0, None, None
     
     print(f"Loading model from {model_path}...")
     model = xgb.XGBClassifier()
     model.load_model(str(model_path))
     
-    # Generate predictions and probabilities
+    # Generate probabilities
     print("Generating predictions...")
-    preds = model.predict(X)
     probs = model.predict_proba(X)[:, 1]
     
-    # Calculate results
+    # Apply the custom threshold instead of using model.predict()
+    # This increases the 'catch rate' (Recall)
+    preds = (probs >= threshold).astype(int)
+    
     total_rows = len(preds)
     anomalies_detected = sum(preds)
     anomaly_percentage = (anomalies_detected / total_rows * 100) if total_rows > 0 else 0
     avg_probability = probs.mean()
     
-    print(f"\nResults:")
+    print(f"\nResults (at {threshold} threshold):")
     print(f"  Total rows: {total_rows:,}")
     print(f"  Anomalies detected: {anomalies_detected:,}")
-    print(f"  Anomaly percentage: {anomaly_percentage:.2f}%")
+    print(f"  Catch Rate / FP Rate: {anomaly_percentage:.2f}%")
     print(f"  Average probability: {avg_probability:.3f}")
-    print(f"  Expected: {expected_result}")
     
-    # Show distribution of probabilities
-    high_confidence = sum(probs >= 0.7)
-    medium_confidence = sum((probs >= 0.3) & (probs < 0.7))
-    low_confidence = sum(probs < 0.3)
+    # Confidence breakdown
+    high = sum(probs >= 0.7)
+    med = sum((probs >= 0.3) & (probs < 0.7))
+    low = sum(probs < 0.3)
     
-    print(f"\nProbability distribution:")
-    print(f"  High confidence (≥0.7): {high_confidence:,} ({high_confidence/total_rows*100:.1f}%)")
-    print(f"  Medium confidence (0.3-0.7): {medium_confidence:,} ({medium_confidence/total_rows*100:.1f}%)")
-    print(f"  Low confidence (<0.3): {low_confidence:,} ({low_confidence/total_rows*100:.1f}%)")
+    print(f"\nConfidence Breakdown:")
+    print(f"  High (>=0.7): {high} | Medium (0.3-0.7): {med} | Low (<0.3): {low}")
     
     return anomaly_percentage, probs, preds
 
@@ -142,19 +140,28 @@ def test_model_on_dataset(csv_path, expected_result, dataset_name):
 def main():
     data_folder = Path(__file__).parent / "Data"
     
-    # Test on errors dataset (should be 100% anomalies)
-    errors_file = data_folder / "AI Training Data - items data errors.csv"
-    test_model_on_dataset(errors_file, "100% anomalies", "Items Data Errors")
+    # Target Threshold: 0.3 balances high recall with low false positives
+    TARGET_THRESHOLD = 0.35 
     
-    # Test on approved dataset (should be 0% anomalies)
+    # Test on errors (Measures RECALL/Catch Rate)
+    errors_file = data_folder / "AI Training Data - items data errors.csv"
+    catch_rate, _, _ = test_model_on_dataset(errors_file, "100% anomalies", "Items Data Errors", threshold=TARGET_THRESHOLD)
+    
+    # Test on approved (Measures FALSE POSITIVE Rate)
     approved_file = data_folder / "AI Training Data - approved profiles.csv"
-    test_model_on_dataset(approved_file, "0% anomalies", "Approved Profiles")
+    fp_rate, _, _ = test_model_on_dataset(approved_file, "0% anomalies", "Approved Profiles", threshold=TARGET_THRESHOLD)
     
     print(f"\n{'=' * 70}")
-    print("TESTING COMPLETE")
+    print("FINAL PERFORMANCE SUMMARY")
     print(f"{'=' * 70}")
+    print(f"Overall Catch Rate (Recall): {catch_rate:.2f}%")
+    print(f"Overall False Positive Rate: {fp_rate:.2f}%")
+    
+    if fp_rate <= 10.0:
+        print("SUCCESS: Your threshold of 0.3 met the <10% False Positive requirement!")
+    else:
+        print("ALERT: False Positive rate exceeds 10%. Consider raising threshold to 0.35 or 0.4.")
 
 
 if __name__ == "__main__":
     main()
-

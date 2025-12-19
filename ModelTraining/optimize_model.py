@@ -22,7 +22,7 @@ def objective(trial):
 
     # 2. Define the Hyperparameter Search Space
     params = {
-        'n_estimators': trial.suggest_int('n_estimators', 100, 500),
+        'n_estimators': trial.suggest_int('n_estimators', 100, 1000),
         'max_depth': trial.suggest_int('max_depth', 3, 10),
         'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3, log=True),
         'subsample': trial.suggest_float('subsample', 0.6, 1.0),
