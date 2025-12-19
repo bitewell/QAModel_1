@@ -76,7 +76,6 @@ def apply_caret_modifications(input_xlsx):
             val = cell.value if cell.value is not None else ""
 
             # Convert float values to integers if they're whole numbers
-            # This removes the .0 suffix from numbers like 5.0 -> "5"
             if isinstance(val, float) and val.is_integer():
                 val = str(int(val))
             else:
