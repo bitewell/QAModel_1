@@ -1,6 +1,5 @@
 import pandas as pd
 import xgboost as xgb
-import sys
 from pathlib import Path
 from sentence_transformers import SentenceTransformer
 
@@ -72,23 +71,26 @@ def process_and_embed(df):
     return X, gtin_column
 
 
-def test_model_on_dataset(csv_path, expected_result, dataset_name, threshold=0.3):
-    # Tests model on a dataset using custom probability threshold
+def predict_test_sample(csv_path, threshold=0.35):
+    # Predicts anomalies on a test CSV file and outputs results
     
-    print(f"\nTesting on: {dataset_name}")
-    print(f"Expected: {expected_result} | Using Threshold: {threshold}")
-    
+    print(f"Loading test file: {csv_path}")
     if not csv_path.exists():
         print(f"Error: File not found at {csv_path}")
-        return 0, None, None
+        return None
     
-    # Load and process data
-    print(f"Loading {csv_path}...")
-    df = pd.read_csv(csv_path)
-    print(f"Loaded {len(df):,} rows")
+    # Load and process data - keep original dataframe for output
+    df_original = pd.read_csv(csv_path)
+    print(f"Loaded {len(df_original):,} rows")
     
-    X, gtin_column = process_and_embed(df)
+    # Process and embed (this creates a filtered version)
+    X, gtin_column = process_and_embed(df_original.copy())
     print(f"After processing: {len(X):,} rows, {len(X.columns)} features")
+    
+    # Match predictions back to original dataframe by GTIN
+    # Some rows may have been filtered out during processing
+    df_original['gtin'] = df_original['gtin'].astype(str)
+    gtin_column = gtin_column.astype(str)
     
     # Load trained model
     model_path = Path(__file__).parent.parent / "ModelTraining" / "final_anomaly_detector.json"
@@ -97,7 +99,8 @@ def test_model_on_dataset(csv_path, expected_result, dataset_name, threshold=0.3
     
     if not model_path.exists():
         print(f"Error: Model not found at {model_path}")
-        return 0, None, None
+        print("Please train the model first using ModelTraining/train_model.py")
+        return None
     
     print(f"Loading model from {model_path}...")
     model = xgb.XGBClassifier()
@@ -107,56 +110,73 @@ def test_model_on_dataset(csv_path, expected_result, dataset_name, threshold=0.3
     print("Generating predictions...")
     probs = model.predict_proba(X)[:, 1]
     
-    # Apply custom threshold (instead of default 0.5)
-    preds = (probs >= threshold).astype(int)
+    # Apply threshold to get binary predictions
+    preds = (probs >= threshold).astype(bool)
     
-    # Calculate metrics
-    total_rows = len(preds)
-    anomalies_detected = sum(preds)
-    anomaly_percentage = (anomalies_detected / total_rows * 100) if total_rows > 0 else 0
-    avg_probability = probs.mean()
+    # Create predictions dataframe with GTIN
+    predictions_df = pd.DataFrame({
+        'gtin': gtin_column,
+        'label_is_anomaly': preds,
+        'probability': probs
+    })
     
-    print(f"\nResults (at {threshold} threshold):")
-    print(f"  Total rows: {total_rows:,}")
-    print(f"  Anomalies detected: {anomalies_detected:,}")
-    print(f"  Catch Rate / FP Rate: {anomaly_percentage:.2f}%")
-    print(f"  Average probability: {avg_probability:.3f}")
+    # Merge predictions back to original dataframe
+    # Keep all original columns and add our prediction columns
+    results_df = df_original.merge(
+        predictions_df,
+        on='gtin',
+        how='left'
+    )
     
-    # Confidence breakdown
-    high = sum(probs >= 0.7)
-    med = sum((probs >= 0.3) & (probs < 0.7))
-    low = sum(probs < 0.3)
+    # Fill NaN for rows that were filtered out during processing
+    results_df['label_is_anomaly'] = results_df['label_is_anomaly'].fillna(False)
+    results_df['probability'] = results_df['probability'].fillna(0.0)
     
-    print(f"\nConfidence Breakdown:")
-    print(f"  High (>=0.7): {high} | Medium (0.3-0.7): {med} | Low (<0.3): {low}")
+    # Summary statistics (only on rows that were successfully processed)
+    processed_mask = results_df['probability'] > 0
+    processed_probs = results_df.loc[processed_mask, 'probability']
+    processed_preds = results_df.loc[processed_mask, 'label_is_anomaly']
     
-    return anomaly_percentage, probs, preds
-
-
-def main():
-    # Main function to test model on both validation datasets
-    data_folder = Path(__file__).parent / "Data"
+    print(f"\nPrediction Summary:")
+    print(f"  Total rows in output: {len(results_df):,}")
+    print(f"  Rows successfully processed: {processed_mask.sum():,}")
+    print(f"  Rows filtered out (missing GTIN/ingredients): {(~processed_mask).sum():,}")
+    print(f"  Anomalies detected (label_is_anomaly=True): {processed_preds.sum():,} ({processed_preds.mean()*100:.2f}%)")
+    print(f"  Normal (label_is_anomaly=False): {(~processed_preds).sum():,}")
+    if len(processed_probs) > 0:
+        print(f"  Average probability: {processed_probs.mean():.3f}")
+        print(f"  Min probability: {processed_probs.min():.3f}")
+        print(f"  Max probability: {processed_probs.max():.3f}")
+        
+        # Confidence breakdown
+        high = (processed_probs >= 0.7).sum()
+        med = ((processed_probs >= 0.3) & (processed_probs < 0.7)).sum()
+        low = (processed_probs < 0.3).sum()
+        print(f"\nConfidence Breakdown:")
+        print(f"  High (>=0.7): {high} | Medium (0.3-0.7): {med} | Low (<0.3): {low}")
     
-    # Target threshold balances high recall with low false positives
-    TARGET_THRESHOLD = 0.2 
-    
-    # Test on errors dataset (measures recall/catch rate)
-    errors_file = data_folder / "AI Training Data - items data errors.csv"
-    catch_rate, _, _ = test_model_on_dataset(errors_file, "100% anomalies", "Items Data Errors", threshold=TARGET_THRESHOLD)
-    
-    # Test on approved dataset (measures false positive rate)
-    approved_file = data_folder / "AI Training Data - approved profiles.csv"
-    fp_rate, _, _ = test_model_on_dataset(approved_file, "0% anomalies", "Approved Profiles", threshold=TARGET_THRESHOLD)
-    
-    print(f"\nFINAL PERFORMANCE SUMMARY")
-    print(f"Overall Catch Rate (Recall): {catch_rate:.2f}%")
-    print(f"Overall False Positive Rate: {fp_rate:.2f}%")
-    
-    if fp_rate <= 10.0:
-        print("SUCCESS: Threshold met the <10% False Positive requirement!")
-    else:
-        print(f"ALERT: False Positive rate exceeds 10%. Consider raising threshold above {TARGET_THRESHOLD}.")
+    return results_df
 
 
 if __name__ == "__main__":
-    main()
+    # Path to test file
+    test_file = Path(__file__).parent / "Data" / "test sample not fully qa'd - all_scores.csv"
+    
+    # Threshold for predictions (lowered to catch more potential anomalies)
+    THRESHOLD = 0.2
+    
+    print("=" * 60)
+    print("ANOMALY DETECTION ON TEST SAMPLE")
+    print("=" * 60)
+    print(f"Threshold: {THRESHOLD}")
+    print()
+    
+    # Run predictions
+    results = predict_test_sample(test_file, threshold=THRESHOLD)
+    
+    if results is not None:
+        # Save results - includes all original columns plus label_is_anomaly and probability
+        output_file = Path(__file__).parent / "Data" / "test_sample_predictions.csv"
+        results.to_csv(output_file, index=False)
+        print(f"\nResults saved to: {output_file}")
+        print(f"Output includes: All original columns + 'label_is_anomaly' (True/False) + 'probability' (0-1)")

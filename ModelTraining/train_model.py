@@ -9,11 +9,24 @@ from pathlib import Path
 def train_final_model():
 
     # Trains final model with optimized hyperparameters and analyzes threshold sensitivity
+    # Uses only: text embeddings + nutrient columns (no tag/flag columns)
     data_path = Path(__file__).parent.parent / "Data" / "PostOpData" / "merged_embedded.parquet"
     df = pd.read_parquet(data_path)
     
     X = df.drop(columns=["gtin", "label_is_anomaly"], errors="ignore")
     y = df["label_is_anomaly"]
+    
+    # Verify feature set
+    print(f"Training on {len(X.columns)} features:")
+    embedding_cols = [c for c in X.columns if '_emb_' in c]
+    nutrient_cols = [c for c in X.columns if c in ['calories', 'total_fat', 'sat_fat', 'trans_fat', 'unsat_fat', 
+                                                     'cholesterol', 'sodium', 'carbs', 'dietary_fiber',
+                                                     'total_sugars', 'added_sugars', 'protein', 'potassium']]
+    print(f"  - Text embeddings: {len(embedding_cols)} features")
+    print(f"  - Nutrient columns: {len(nutrient_cols)} features")
+    print(f"  - Total features: {len(X.columns)}")
+    print(f"  - Training samples: {len(X):,}")
+    print(f"  - Anomalies: {y.sum():,} ({y.mean()*100:.2f}%)")
     
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
     

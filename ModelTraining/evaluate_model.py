@@ -34,22 +34,23 @@ def plot_and_measure_recall_at_k(y_test, probs, k_values=[500, 1000, 2000]):
 
 
 def check_nutrient_segments(X_test, y_test, preds):
-    # Checks precision for different nutrient flag segments
-    print("\nPrecision by Nutrient Segments:")
+    # Checks precision for different nutrient value ranges (flag columns no longer available)
+    print("\nPrecision by Nutrient Value Ranges:")
     results = X_test.copy()
     results['true_label'] = y_test
     results['prediction'] = preds
     
-    flag_columns = ['flag_calorie_mismatch', 'flag_fat_mismatch', 'flag_carb_mismatch', 
-                    'flag_sugar_mismatch', 'flag_negative_values']
+    # Check nutrient columns that exist in the feature set
+    nutrient_cols = ['calories', 'total_fat', 'sat_fat', 'carbs', 'total_sugars', 'sodium', 'protein']
     
-    for flag_col in flag_columns:
-        if flag_col in results.columns:
-            flagged = results[results[flag_col] == True]
-            if len(flagged) > 0:
-                precision = flagged['true_label'].mean()
-                nutrient_name = flag_col.replace('flag_', '').replace('_', ' ').title()
-                print(f"Precision for {nutrient_name}: {precision:.1%} ({len(flagged)} flagged)")
+    for nutrient_col in nutrient_cols:
+        if nutrient_col in results.columns:
+            # Check high-value ranges (potential anomalies)
+            high_threshold = results[nutrient_col].quantile(0.9)
+            high_values = results[results[nutrient_col] > high_threshold]
+            if len(high_values) > 0:
+                precision = high_values['true_label'].mean()
+                print(f"Precision for high {nutrient_col} (> {high_threshold:.1f}): {precision:.1%} ({len(high_values)} items)")
 
 
 def export_false_positives(X_test, y_test, probs, df_original):
