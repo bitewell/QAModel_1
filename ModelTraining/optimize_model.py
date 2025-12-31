@@ -9,6 +9,7 @@ from pathlib import Path
 
 def objective(trial):
     # Optuna objective function for hyperparameter optimization
+    # Uses only: text embeddings + nutrient columns (no tag/flag columns)
     data_path = Path(__file__).parent.parent / "Data" / "PostOpData" / "merged_embedded.parquet"
     df = pd.read_parquet(data_path)
     
