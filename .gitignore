@@ -136,10 +136,16 @@ dmypy.json
 *.pth
 *.ckpt
 *.safetensors
-final_anomaly_detector.json
-best_hyperparams.json
 
-# Data files
+# Trained model files
+final_anomaly_detector.json
+final_anomaly_detector_sodium.json
+best_hyperparams.json
+best_hyperparams_sodium.json
+sodium_scaler.pkl
+
+
+# Data files (uncomment specific lines if you want to track certain data files)
 *.csv
 *.xlsx
 *.xls
@@ -152,10 +158,19 @@ best_hyperparams.json
 *.sqlite
 *.sqlite3
 
-# Large data directories (uncomment if you want to ignore all data)
-# Data/PreOpDataCSV/
-# Data/PostOpData/
-# ModelTests/Data/
+# Large data directories - ignore all data files
+Data/PreOpData/
+Data/PreOpDataCSV/
+Data/PostOpData/
+DataSodium/PreOpData/
+DataSodium/PreOpDataCSV/
+DataSodium/PostOpData/
+ModelTests/Data/*.csv
+ModelTests/Data/*.xlsx
+ModelTests/Data/*.parquet
+
+# But keep test data structure (optional - uncomment if you want to track test data)
+# !ModelTests/Data/AI Training Data*.csv
 
 # Keep data structure but ignore contents (optional - uncomment if needed)
 # Data/PreOpDataCSV/*
@@ -278,6 +293,10 @@ test_sample_predictions.csv
 evaluation_results/
 model_comparisons/
 
+# Ensemble prediction outputs
+ensemble_predictions_*.csv
+ModelTests/Data/ensemble_predictions_*.csv
+
 # Jupyter Notebook outputs (if you add notebooks)
 *.ipynb_checkpoints/
 
@@ -334,9 +353,12 @@ credentials.json
 # Keep README but ignore other docs if needed
 # docs/
 
-# Keep structure directories
-!Data/PreOpData/.gitkeep
-!Data/PreOpDataCSV/.gitkeep
-!Data/PostOpData/.gitkeep
-!ModelTests/Data/.gitkeep
+# Keep structure directories (if using .gitkeep files)
+# !Data/PreOpData/.gitkeep
+# !Data/PreOpDataCSV/.gitkeep
+# !Data/PostOpData/.gitkeep
+# !DataSodium/PreOpData/.gitkeep
+# !DataSodium/PreOpDataCSV/.gitkeep
+# !DataSodium/PostOpData/.gitkeep
+# !ModelTests/Data/.gitkeep
 

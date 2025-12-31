@@ -1,5 +1,7 @@
 import pandas as pd
 import xgboost as xgb
+import sys
+import pickle
 from pathlib import Path
 from sentence_transformers import SentenceTransformer
 
@@ -36,6 +38,18 @@ def process_and_embed(df):
             numeric_val = df[col].astype(str).str.rstrip("^").str.strip()
             df[col] = pd.to_numeric(numeric_val, errors="coerce")
             df[col] = df[col].fillna(-1)
+    
+    # Load and apply sodium scaler (if it exists)
+    if "sodium" in df.columns:
+        scaler_path = Path(__file__).parent.parent / "DataOps" / "sodium_scaler.pkl"
+        if scaler_path.exists():
+            with open(scaler_path, 'rb') as f:
+                scaler = pickle.load(f)
+            # Transform sodium using saved scaler
+            df["sodium"] = scaler.transform(df[["sodium"]])
+            print("Applied saved sodium scaler")
+        else:
+            print("Warning: Sodium scaler not found. Sodium will not be scaled.")
     
     # Remove rows without GTIN or empty ingredients
     df = df.dropna(subset=["gtin"])
@@ -159,24 +173,45 @@ def predict_test_sample(csv_path, threshold=0.35):
 
 
 if __name__ == "__main__":
-    # Path to test file
-    test_file = Path(__file__).parent / "Data" / "test sample not fully qa'd - all_scores.csv"
-    
-    # Threshold for predictions (lowered to catch more potential anomalies)
+    # Default threshold for predictions
     THRESHOLD = 0.2
+    
+    # Get input file from command line argument or use default
+    if len(sys.argv) > 1:
+        # Use provided file path
+        input_file = Path(sys.argv[1])
+        if not input_file.is_absolute():
+            # If relative path, assume it's relative to Data folder
+            input_file = Path(__file__).parent / "Data" / sys.argv[1]
+    else:
+        # Default to test sample file
+        input_file = Path(__file__).parent / "Data" / "test sample not fully qa'd - all_scores.csv"
+    
+    # Get threshold from command line if provided
+    if len(sys.argv) > 2:
+        try:
+            THRESHOLD = float(sys.argv[2])
+        except ValueError:
+            print(f"Warning: Invalid threshold '{sys.argv[2]}', using default {THRESHOLD}")
+    
+    # Generate output filename from input filename
+    input_stem = input_file.stem
+    output_file = Path(__file__).parent / "Data" / f"{input_stem}_predictions.csv"
     
     print("=" * 60)
     print("ANOMALY DETECTION ON TEST SAMPLE")
     print("=" * 60)
+    print(f"Input file: {input_file.name}")
     print(f"Threshold: {THRESHOLD}")
     print()
     
     # Run predictions
-    results = predict_test_sample(test_file, threshold=THRESHOLD)
+    results = predict_test_sample(input_file, threshold=THRESHOLD)
     
     if results is not None:
         # Save results - includes all original columns plus label_is_anomaly and probability
-        output_file = Path(__file__).parent / "Data" / "test_sample_predictions.csv"
         results.to_csv(output_file, index=False)
         print(f"\nResults saved to: {output_file}")
         print(f"Output includes: All original columns + 'label_is_anomaly' (True/False) + 'probability' (0-1)")
+        print(f"\nUsage: python3 predict_test_sample.py [filename.csv] [threshold]")
+        print(f"Example: python3 predict_test_sample.py 'TEST 2 for Anomoly Test (from NIQ pt3 sheet1 - Sheet1.csv' 0.2")

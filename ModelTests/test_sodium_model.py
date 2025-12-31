@@ -1,55 +1,39 @@
 import pandas as pd
 import xgboost as xgb
 import sys
-import pickle
 from pathlib import Path
 from sentence_transformers import SentenceTransformer
 
-# Column definitions matching embed_text.py
+# Column definitions matching DataOpSodium/embed_text.py
 TEXT_COLS = ["category_name", "product_name", "ingredients_text"]
 
-NUTRIENT_COLS = [
-    "calories", "total_fat", "sat_fat", "trans_fat", "unsat_fat",
-    "cholesterol", "sodium", "carbs", "dietary_fiber",
-    "total_sugars", "added_sugars", "protein", "potassium",
-]
+# Only sodium nutrient column for sodium-specific anomaly detection
+NUTRIENT_COLS = ["sodium"]
 
-# Columns to keep: only text + nutrients + gtin (no tags/flags)
+# Columns to keep: only text + sodium + gtin (no tags/flags)
 COLS_TO_KEEP = TEXT_COLS + NUTRIENT_COLS + ["gtin"]
 
 
 def process_and_embed(df):
-    # Cleans and embeds raw CSV data to match training feature set
-    # Only uses: text columns (embedded) + nutrient columns (no tag/flag columns)
+    # Cleans and embeds raw CSV data to match sodium model training feature set
+    # Only uses: text columns (embedded) + sodium column
     
     # Keep only columns used in training
     keep = [c for c in COLS_TO_KEEP if c in df.columns]
     df = df[keep].copy()
-    print(f"Selected {len(keep)} columns: text + nutrients + gtin")
+    print(f"Selected {len(keep)} columns: text + sodium + gtin")
     
     # Convert ID and text columns to string
     for col in ["gtin"] + TEXT_COLS:
         if col in df.columns:
             df[col] = df[col].astype("string")
     
-    # Convert nutrient columns to numeric (remove carets, fill missing with -1)
+    # Convert sodium to numeric (remove carets, fill missing with -1)
     for col in NUTRIENT_COLS:
         if col in df.columns:
             numeric_val = df[col].astype(str).str.rstrip("^").str.strip()
             df[col] = pd.to_numeric(numeric_val, errors="coerce")
             df[col] = df[col].fillna(-1)
-    
-    # Load and apply sodium scaler (if it exists)
-    if "sodium" in df.columns:
-        scaler_path = Path(__file__).parent.parent / "DataOps" / "sodium_scaler.pkl"
-        if scaler_path.exists():
-            with open(scaler_path, 'rb') as f:
-                scaler = pickle.load(f)
-            # Transform sodium using saved scaler
-            df["sodium"] = scaler.transform(df[["sodium"]])
-            print("Applied saved sodium scaler")
-        else:
-            print("Warning: Sodium scaler not found. Sodium will not be scaled.")
     
     # Remove rows without GTIN or empty ingredients
     df = df.dropna(subset=["gtin"])
@@ -75,8 +59,8 @@ def process_and_embed(df):
     # Verify feature set matches training
     final_cols = df.columns.tolist()
     embedding_count = len([c for c in final_cols if '_emb_' in c])
-    nutrient_count = len([c for c in final_cols if c in NUTRIENT_COLS])
-    print(f"Final features: {embedding_count} embeddings + {nutrient_count} nutrients = {len(final_cols)} total")
+    sodium_count = len([c for c in final_cols if c in NUTRIENT_COLS])
+    print(f"Final features: {embedding_count} embeddings + {sodium_count} sodium = {len(final_cols)} total")
     
     # Separate GTIN for reference, return feature matrix
     gtin_column = df["gtin"].copy() if "gtin" in df.columns else None
@@ -86,7 +70,7 @@ def process_and_embed(df):
 
 
 def test_model_on_dataset(csv_path, expected_result, dataset_name, threshold=0.3):
-    # Tests model on a dataset using custom probability threshold
+    # Tests sodium model on a dataset using custom probability threshold
     
     print(f"\nTesting on: {dataset_name}")
     print(f"Expected: {expected_result} | Using Threshold: {threshold}")
@@ -103,16 +87,18 @@ def test_model_on_dataset(csv_path, expected_result, dataset_name, threshold=0.3
     X, gtin_column = process_and_embed(df)
     print(f"After processing: {len(X):,} rows, {len(X.columns)} features")
     
-    # Load trained model
-    model_path = Path(__file__).parent.parent / "ModelTraining" / "final_anomaly_detector.json"
+    # Load trained sodium model (check root directory first, then ModelTrainingSodium folder)
+    model_path = Path(__file__).parent.parent / "final_anomaly_detector_sodium.json"
     if not model_path.exists():
-        model_path = Path(__file__).parent.parent / "final_anomaly_detector.json"
+        # Try ModelTrainingSodium folder
+        model_path = Path(__file__).parent.parent / "ModelTrainingSodium" / "final_anomaly_detector_sodium.json"
     
     if not model_path.exists():
-        print(f"Error: Model not found at {model_path}")
+        print(f"Error: Sodium model not found")
+        print("Please train the sodium model first using ModelTrainingSodium/train_model.py")
         return 0, None, None
     
-    print(f"Loading model from {model_path}...")
+    print(f"Loading sodium model from {model_path}...")
     model = xgb.XGBClassifier()
     model.load_model(str(model_path))
     
@@ -147,11 +133,15 @@ def test_model_on_dataset(csv_path, expected_result, dataset_name, threshold=0.3
 
 
 def main():
-    # Main function to test model on both validation datasets
+    # Main function to test sodium model on both validation datasets
     data_folder = Path(__file__).parent / "Data"
     
     # Target threshold balances high recall with low false positives
-    TARGET_THRESHOLD = 0.2 
+    TARGET_THRESHOLD = 0.35 
+    
+    print("=" * 60)
+    print("SODIUM MODEL TESTING ON AI TRAINING DATA")
+    print("=" * 60)
     
     # Test on errors dataset (measures recall/catch rate)
     errors_file = data_folder / "AI Training Data - items data errors.csv"
@@ -161,7 +151,9 @@ def main():
     approved_file = data_folder / "AI Training Data - approved profiles.csv"
     fp_rate, _, _ = test_model_on_dataset(approved_file, "0% anomalies", "Approved Profiles", threshold=TARGET_THRESHOLD)
     
-    print(f"\nFINAL PERFORMANCE SUMMARY")
+    print(f"\n" + "=" * 60)
+    print(f"FINAL PERFORMANCE SUMMARY - SODIUM MODEL")
+    print("=" * 60)
     print(f"Overall Catch Rate (Recall): {catch_rate:.2f}%")
     print(f"Overall False Positive Rate: {fp_rate:.2f}%")
     
@@ -173,3 +165,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
